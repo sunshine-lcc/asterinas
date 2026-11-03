@@ -53,3 +53,10 @@ distro/etc_nixos/_config_for_test.nix
 # Ubuntu rootfs tarball and build logs
 /ubuntu-base-*.tar.gz
 /ubuntu-*.log
+
+# Wayland test build outputs and captured runtime artifacts
+test/wayland/bin/
+test/wayland/xdg-shell-client-protocol.c
+test/wayland/xdg-shell-client-protocol.h
+test-artifacts/
+tools/__pycache__/

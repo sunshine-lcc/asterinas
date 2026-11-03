@@ -29,6 +29,8 @@
 #    ignored when QEMU_DISPLAY is set;
 #  - XFSTESTS_NEEDS_BLOCK_DEVICES: "true" or "false", whether to attach
 #    xfstests images (xfstests_test.img and xfstests_scratch.img) to the VM.
+#  - QEMU_QMP_SOCKET: optional Unix socket path for the QMP monitor, used by
+#    headless screenshot tooling (e.g. tools/qemu_capture.py).
 
 OVMF=${OVMF:-"on"}
 # Directory holding OVMF.fd, OVMF_VARS.fd and microvm/MICROVM.fd. Defaults to the
@@ -42,6 +44,7 @@ NETDEV=${NETDEV:-"user"}
 QEMU_DISPLAY=${QEMU_DISPLAY:-"vnc=0.0.0.0:${VNC_PORT:-42}"}
 CONSOLE=${CONSOLE:-"hvc0"}
 XFSTESTS_NEEDS_BLOCK_DEVICES=${XFSTESTS_NEEDS_BLOCK_DEVICES:-false}
+QEMU_QMP_SOCKET=${QEMU_QMP_SOCKET:-""}
 
 if [ "$XFSTESTS_NEEDS_BLOCK_DEVICES" != "true" ] && \
    [ "$XFSTESTS_NEEDS_BLOCK_DEVICES" != "false" ]; then
@@ -399,6 +402,10 @@ if [ "$OVMF" = "on" ]; then
             -bios ${OVMF_DIR}/OVMF.fd \
         "
     fi
+fi
+
+if [ -n "$QEMU_QMP_SOCKET" ]; then
+    QEMU_ARGS="${QEMU_ARGS} -qmp unix:${QEMU_QMP_SOCKET},server=on,wait=off"
 fi
 
 echo $QEMU_ARGS
