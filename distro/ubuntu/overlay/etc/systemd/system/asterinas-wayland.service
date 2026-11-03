@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MPL-2.0
+
+[Unit]
+Description=Asterinas native Wayland graphical session
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/etc/asterinas/wayland-session.sh
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

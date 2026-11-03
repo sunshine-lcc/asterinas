@@ -30,6 +30,7 @@ SIZE="4G"
 OVERLAY="$DEFAULT_OVERLAY"
 STAGE=""
 WITH_SYSTEMD=0
+WITH_GUI=0
 DNS_SERVER="${DNS_SERVER:-10.0.2.3}"
 KEEP_STAGE=0
 
@@ -43,6 +44,8 @@ Options:
                       (default: distro/ubuntu/overlay)
   --stage <dir>       Use a specific staging directory instead of a temporary one
   --with-systemd      Install systemd, systemd-sysv, udev, and dbus with apt
+  --with-gui          Install the Wayland/X11 graphics stack used by the
+                      graphical test targets (requires --with-systemd)
   --dns <addr>        Nameserver written to /etc/resolv.conf (default: 10.0.2.3)
   --keep-stage        Keep the temporary staging directory after the build
   -h, --help          Show this help
@@ -83,6 +86,10 @@ while [ "$#" -gt 0 ]; do
             WITH_SYSTEMD=1
             shift
             ;;
+        --with-gui)
+            WITH_GUI=1
+            shift
+            ;;
         --dns)
             DNS_SERVER="$2"
             shift 2
@@ -105,6 +112,9 @@ done
 [ -n "$OUTPUT" ] || die "--output is required"
 [ -f "$TARBALL" ] || die "tarball not found: $TARBALL"
 [ -d "$OVERLAY" ] || die "overlay directory not found: $OVERLAY"
+if [ "$WITH_GUI" = 1 ] && [ "$WITH_SYSTEMD" != 1 ]; then
+    die "--with-gui requires --with-systemd"
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
     die "this script must run as root; use the Asterinas development container"
@@ -327,11 +337,65 @@ EOF
 
     # The package enables getty@tty1, which cannot run on Asterinas yet.
     # Keep the serial console as the primary login instead.
-    rm -f "$stage/etc/systemd/system/getty.target.wants/getty@tty1.service"
+    rm -f "$STAGE/etc/systemd/system/getty.target.wants/getty@tty1.service"
+}
+
+install_gui() {
+    local stage=$1
+
+    echo "[ubuntu-rootfs] installing the graphical stack with apt"
+
+    cp -L /etc/resolv.conf "$stage/etc/resolv.conf"
+
+    mount --rbind /dev "$stage/dev"
+    mount -t proc proc "$stage/proc"
+    mount -t sysfs sysfs "$stage/sys"
+    cleanup_gui_mounts() {
+        umount -R "$stage/dev" 2>/dev/null || true
+        umount "$stage/proc" 2>/dev/null || true
+        umount "$stage/sys" 2>/dev/null || true
+    }
+    trap cleanup_gui_mounts RETURN
+
+    cat > "$stage/usr/sbin/policy-rc.d" <<'EOF'
+#!/bin/sh
+exit 101
+EOF
+    chmod +x "$stage/usr/sbin/policy-rc.d"
+
+    chroot "$stage" /usr/bin/env \
+        DEBIAN_FRONTEND=noninteractive \
+        SYSTEMD_OFFLINE=1 \
+        apt-get update
+    chroot "$stage" /usr/bin/env \
+        DEBIAN_FRONTEND=noninteractive \
+        SYSTEMD_OFFLINE=1 \
+        apt-get install -y --no-install-recommends \
+            weston cage foot screenfetch lsb-release bc pciutils procps \
+            wayland-utils libinput-bin seatd libdrm-tests \
+            xserver-xorg-core xserver-xorg-input-evdev xinit xterm \
+            x11-xserver-utils \
+            xkb-data fonts-dejavu-core
+
+    rm -f "$stage/usr/sbin/policy-rc.d"
+    rm -rf "$stage/var/lib/apt/lists"/*
+    rm -f "$stage"/var/cache/apt/archives/*.deb
+
+    [ -x "$stage/usr/bin/weston" ] || die "weston was not installed"
+    [ -x "$stage/usr/bin/foot" ] || die "foot was not installed"
+    [ -x "$stage/usr/bin/cage" ] || die "cage was not installed"
 }
 
 if [ "$WITH_SYSTEMD" = 1 ]; then
     install_systemd "$STAGE"
+fi
+
+if [ "$WITH_GUI" = 1 ]; then
+    install_gui "$STAGE"
+
+    mkdir -p "$STAGE/etc/systemd/system/multi-user.target.wants"
+    ln -sfn /etc/systemd/system/asterinas-wltext.service \
+        "$STAGE/etc/systemd/system/multi-user.target.wants/asterinas-wltext.service"
 fi
 
 printf 'nameserver %s\n' "$DNS_SERVER" > "$STAGE/etc/resolv.conf"

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MPL-2.0
+
+[Unit]
+Description=Asterinas Xorg graphical session
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/etc/asterinas/xorg-session.sh
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

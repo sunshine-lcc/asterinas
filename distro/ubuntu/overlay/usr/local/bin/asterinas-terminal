@@ -1,0 +1,22 @@
+#!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
+#
+# The terminal payload used by the Asterinas Wayland demo. It is launched by
+# foot inside the compositor and both prints to the graphical terminal and
+# emits a serial marker so the host-side test harness can take a screenshot.
+
+export TERM=xterm-256color
+
+echo "WAYLAND-TEST: TERMINAL-READY" > /dev/ttyS0 2>/dev/null || true
+
+echo '$ screenfetch'
+screenfetch 2>&1 || true
+echo
+echo '$ uname -a'
+uname -a 2>&1 || true
+echo
+echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unknown}"
+echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown}"
+echo
+echo "Screenshot window: sleeping for 600 seconds."
+sleep 600
