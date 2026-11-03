@@ -8,15 +8,22 @@
 //!
 //! Individual planes, CRTCs, encoders, connectors, and properties are defined in the [`objects`] module.
 
+use alloc::sync::Arc;
+
 use aster_core::prelude::*;
 use ostd::sync::Mutex;
 
 use crate::{
     device::DrmDevice,
-    kms::objects::{
-        DrmKmsObjectStore, KmsObjectIndex,
-        connector::{DrmConnector, DrmConnectorProbeState},
-        framebuffer::DrmFramebuffer,
+    kms::{
+        display_mode::DrmDisplayMode,
+        objects::{
+            DrmKmsObjectStore, KmsObjectIndex,
+            connector::{DrmConnector, DrmConnectorProbeState, DrmConnectorState},
+            crtc::DrmCrtcState,
+            framebuffer::DrmFramebuffer,
+            plane::DrmPlaneState,
+        },
     },
     utils::{DrmRect, DrmSize},
 };
@@ -178,6 +185,47 @@ impl DrmModeConfig {
 
     pub(crate) fn supports_async_page_flip(&self) -> bool {
         self.supports_async_page_flip
+    }
+
+    /// Publishes the mode that is already active on the boot display.
+    ///
+    /// Firmware and bootloaders leave the display scanning out before the DRM
+    /// driver is registered. Userspace compositors rely on the initial CRTC,
+    /// encoder, and connector state to know that an output is already enabled;
+    /// otherwise they may try to enable it without a scanout buffer.
+    pub fn set_initial_enabled_mode(
+        &self,
+        crtc_index: KmsObjectIndex,
+        encoder_index: KmsObjectIndex,
+        connector_index: KmsObjectIndex,
+        display_mode: DrmDisplayMode,
+    ) -> Result<()> {
+        let object_store = self.object_store.lock();
+
+        let crtc = object_store
+            .crtcs()
+            .find(|crtc| crtc.index() == crtc_index)
+            .ok_or(Errno::ENOENT)?;
+        let encoder = object_store
+            .encoders()
+            .find(|encoder| encoder.index() == encoder_index)
+            .ok_or(Errno::ENOENT)?;
+        let connector = object_store
+            .connectors()
+            .find(|connector| connector.index() == connector_index)
+            .ok_or(Errno::ENOENT)?;
+
+        crtc.update_state(DrmCrtcState::new(display_mode));
+        if let Some(primary_plane) = crtc.primary_plane().upgrade() {
+            // The boot framebuffer is not a GEM object managed by this DRM
+            // device, so there is no framebuffer ID to expose yet.
+            primary_plane.update_state(DrmPlaneState::default());
+        }
+
+        encoder.set_current_crtc(Arc::downgrade(crtc));
+        connector.update_state(DrmConnectorState::new(Arc::downgrade(encoder)));
+
+        Ok(())
     }
 
     pub(crate) fn supports_fb_modifiers(&self) -> bool {

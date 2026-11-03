@@ -2,6 +2,7 @@
 
 use alloc::{
     boxed::Box,
+    collections::VecDeque,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -17,7 +18,7 @@ use aster_core::{
     prelude::*,
     process::{
         Process,
-        signal::{PollHandle, Pollable},
+        signal::{PollHandle, Pollable, Pollee},
     },
     util::ioctl::RawIoctl,
     vm::vmar::{FileMmapRequest, MapHandle},
@@ -34,6 +35,7 @@ use crate::{
     device::{DrmDevice, DrmMaster},
     gem::object::DrmGemObject,
     has_current_sys_admin,
+    ioctl::DrmEventVblank,
     kms::objects::{KmsObjectId, framebuffer::DrmFramebuffer},
     minor::{DrmMinor, DrmMinorType},
 };
@@ -55,6 +57,10 @@ pub(super) struct DrmFile {
     gem_handles: Mutex<DrmGemHandleTable>,
     /// Framebuffers created through this open file.
     framebuffers: Mutex<Vec<Arc<DrmFramebuffer>>>,
+    /// Events waiting to be read through `DRM_IOCTL` event reads.
+    events: Mutex<VecDeque<DrmEventVblank>>,
+    /// Notifies pollers when an event is queued.
+    pollee: Pollee,
 }
 
 impl DrmFile {
@@ -94,6 +100,8 @@ impl DrmFile {
 
             gem_handles: Mutex::new(DrmGemHandleTable::new()),
             framebuffers: Mutex::new(Vec::new()),
+            events: Mutex::new(VecDeque::new()),
+            pollee: Pollee::new(),
         }
     }
 
@@ -218,6 +226,17 @@ impl DrmFile {
         Some(framebuffers.swap_remove(position))
     }
 
+    /// Queues an event for this open file.
+    ///
+    /// Page flips are completed synchronously by the current DRM
+    /// implementation, so the event is already pending before userspace
+    /// calls `poll` or `read`. A future asynchronous implementation must
+    /// also wake up pollers here.
+    pub(super) fn queue_event(&self, event: DrmEventVblank) {
+        self.events.lock().push_back(event);
+        self.pollee.notify(IoEvents::IN);
+    }
+
     /// Keeps tracking the ioctl caller while this file has never been master,
     /// so fd passing can update ownership. After the file has been master once,
     /// keeps owner identity stable to enforce same-owner master reacquisition semantics.
@@ -316,10 +335,37 @@ impl FileOps for DrmFile {
     fn read_at(
         &self,
         _offset: usize,
-        _writer: &mut VmWriter,
+        writer: &mut VmWriter,
         _status_flags: StatusFlags,
     ) -> Result<usize> {
-        return_errno_with_message!(Errno::EINVAL, "reading from a DRM file is not supported")
+        const EVENT_SIZE: usize = size_of::<DrmEventVblank>();
+
+        if writer.avail() < EVENT_SIZE {
+            return_errno_with_message!(
+                Errno::EINVAL,
+                "the buffer is too small for a DRM event"
+            );
+        }
+
+        let mut events = self.events.lock();
+        if events.is_empty() {
+            return_errno_with_message!(Errno::EAGAIN, "the DRM file has no pending events");
+        }
+
+        let mut written = 0;
+        while writer.avail() >= EVENT_SIZE {
+            let Some(event) = events.pop_front() else {
+                break;
+            };
+            writer.write_val(&event)?;
+            written += EVENT_SIZE;
+        }
+        drop(events);
+
+        // The queue changed; let pollers re-evaluate their readiness.
+        self.pollee.invalidate();
+
+        Ok(written)
     }
 
     fn write_at(
@@ -333,9 +379,14 @@ impl FileOps for DrmFile {
 }
 
 impl Pollable for DrmFile {
-    fn poll(&self, mask: IoEvents, _poller: Option<&mut PollHandle>) -> IoEvents {
-        let events = IoEvents::IN | IoEvents::OUT;
-        events & mask
+    fn poll(&self, mask: IoEvents, poller: Option<&mut PollHandle>) -> IoEvents {
+        self.pollee.poll_with(mask, poller, || {
+            if self.events.lock().is_empty() {
+                IoEvents::empty()
+            } else {
+                IoEvents::IN
+            }
+        })
     }
 }
 

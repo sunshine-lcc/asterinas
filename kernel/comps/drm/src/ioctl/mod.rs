@@ -8,6 +8,26 @@ use aster_core::{dispatch_ioctl, prelude::*, util::ioctl::RawIoctl};
 
 use crate::{file::DrmFile, has_current_sys_admin, minor::DrmMinorType};
 
+/// The type of a userspace-visible DRM event.
+///
+/// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm.h#L1130-L1131>.
+pub(super) const DRM_EVENT_FLIP_COMPLETE: u32 = 0x02;
+
+/// A page-flip completion event; `struct drm_event_vblank` in Linux.
+///
+/// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm.h#L1133-L1141>.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod)]
+pub(super) struct DrmEventVblank {
+    pub(super) type_: u32,
+    pub(super) length: u32,
+    pub(super) user_data: u64,
+    pub(super) tv_sec: u32,
+    pub(super) tv_usec: u32,
+    pub(super) sequence: u32,
+    pub(super) reserved: u32,
+}
+
 impl DrmFile {
     pub(super) fn dispatch_ioctl(&self, raw_ioctl: RawIoctl) -> Result<i32> {
         use ioctl_defs::*;
@@ -75,6 +95,18 @@ impl DrmFile {
             cmd @ ModeSetCrtc => {
                 self.check_kms_ioctl_access(DrmIoctlAccess::MASTER)?;
                 self.drm_mode_set_crtc(cmd)
+            }
+            cmd @ ModePageFlip => {
+                self.check_kms_ioctl_access(DrmIoctlAccess::MASTER)?;
+                self.drm_mode_page_flip(cmd)
+            }
+            cmd @ ModeCursor => {
+                self.check_kms_ioctl_access(DrmIoctlAccess::MASTER)?;
+                self.drm_mode_cursor(cmd)
+            }
+            cmd @ ModeCursor2 => {
+                self.check_kms_ioctl_access(DrmIoctlAccess::MASTER)?;
+                self.drm_mode_cursor2(cmd)
             }
             cmd @ ModeGetEncoder => {
                 self.check_kms_ioctl_access(DrmIoctlAccess::empty())?;
@@ -197,9 +229,10 @@ mod ioctl_defs {
         gem::{DrmGemClose, DrmModeCreateDumb, DrmModeDestroyDumb, DrmModeMapDumb},
         general::{DrmAuth, DrmGetCap, DrmUnique, DrmVersion},
         kms::{
-            DrmModeCrtc, DrmModeFbCmd, DrmModeFbDirtyCmd, DrmModeGetBlob, DrmModeGetConnector,
-            DrmModeGetEncoder, DrmModeGetPlane, DrmModeGetPlaneRes, DrmModeGetProperty,
-            DrmModeGetResources, DrmModeObjectGetProps, DrmSetClientCap,
+            DrmModeCrtc, DrmModeCursor, DrmModeCursor2, DrmModeFbCmd, DrmModeFbDirtyCmd,
+            DrmModeGetBlob, DrmModeGetConnector, DrmModeGetEncoder, DrmModeGetPlane,
+            DrmModeGetPlaneRes, DrmModeGetProperty, DrmModeGetResources, DrmModeObjectGetProps,
+            DrmModePageFlip, DrmSetClientCap,
         },
     };
 
@@ -219,6 +252,9 @@ mod ioctl_defs {
     pub(super) type ModeGetResources        = ioc!(DRM_IOCTL_MODE_GETRESOURCES,         b'd', 0xa0, InOutData<DrmModeGetResources>);
     pub(super) type ModeGetCrtc             = ioc!(DRM_IOCTL_MODE_GETCRTC,              b'd', 0xa1, InOutData<DrmModeCrtc>);
     pub(super) type ModeSetCrtc             = ioc!(DRM_IOCTL_MODE_SETCRTC,              b'd', 0xa2, InOutData<DrmModeCrtc>);
+    pub(super) type ModePageFlip            = ioc!(DRM_IOCTL_MODE_PAGE_FLIP,            b'd', 0xb0, InOutData<DrmModePageFlip>);
+    pub(super) type ModeCursor              = ioc!(DRM_IOCTL_MODE_CURSOR,               b'd', 0xa3, InOutData<DrmModeCursor>);
+    pub(super) type ModeCursor2             = ioc!(DRM_IOCTL_MODE_CURSOR2,              b'd', 0xbb, InOutData<DrmModeCursor2>);
     pub(super) type ModeGetEncoder          = ioc!(DRM_IOCTL_MODE_GETENCODER,           b'd', 0xa6, InOutData<DrmModeGetEncoder>);
     pub(super) type ModeGetConnector        = ioc!(DRM_IOCTL_MODE_GETCONNECTOR,         b'd', 0xa7, InOutData<DrmModeGetConnector>);
     pub(super) type ModeGetProperty         = ioc!(DRM_IOCTL_MODE_GETPROPERTY,          b'd', 0xaa, InOutData<DrmModeGetProperty>);

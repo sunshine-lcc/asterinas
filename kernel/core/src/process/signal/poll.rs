@@ -30,7 +30,7 @@ use crate::{
 /// Then, [`Pollee::poll_with`] can allow you to register a [`Poller`] to wait for certain events,
 /// or register a [`PollAdaptor`] to be notified when certain events occur.
 #[derive(Clone)]
-pub(crate) struct Pollee {
+pub struct Pollee {
     inner: Arc<PolleeInner>,
 }
 
@@ -58,6 +58,12 @@ struct PolleeInner {
     state: AtomicIsize,
 }
 
+impl Debug for Pollee {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Pollee").finish_non_exhaustive()
+    }
+}
+
 impl Default for Pollee {
     fn default() -> Self {
         Self::new()
@@ -66,7 +72,7 @@ impl Default for Pollee {
 
 impl Pollee {
     /// Creates a new pollee.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let inner = PolleeInner {
             subject: SyncSubject::new(),
             state: AtomicIsize::new(INV_STATE),
@@ -87,7 +93,7 @@ impl Pollee {
     /// The above statement about atomicity is true even if `check` contains race conditions (and
     /// in fact it always will, because even if it holds a lock, the lock will be released when
     /// `check` returns).
-    pub(crate) fn poll_with<F>(
+    pub fn poll_with<F>(
         &self,
         mask: IoEvents,
         poller: Option<&mut PollHandle>,
@@ -171,7 +177,7 @@ impl Pollee {
     ///
     /// This method should be called whenever new events arrive. The events can be spurious. This
     /// way, the caller can avoid expensive calculations and simply add all possible ones.
-    pub(crate) fn notify(&self, events: IoEvents) {
+    pub fn notify(&self, events: IoEvents) {
         self.invalidate();
 
         self.inner.subject.notify_observers(&events);
@@ -182,7 +188,7 @@ impl Pollee {
     /// This method should be called whenever old events disappear but no new events arrive. The
     /// invalidation can be spurious, so the caller can avoid complex calculations and simply
     /// invalidate even if no events disappear.
-    pub(crate) fn invalidate(&self) {
+    pub fn invalidate(&self) {
         // The memory order must be `Release`, so that the reader is guaranteed to see the changes
         // that trigger the invalidation.
         self.inner.state.store(INV_STATE, Ordering::Release);

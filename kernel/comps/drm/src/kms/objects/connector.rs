@@ -194,6 +194,8 @@ pub enum DrmConnectorType {
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrmConnectorStatus {
+    // Match the Linux UAPI `DRM_MODE_CONNECTED` values (1/2/3), not the
+    // internal `drm_connector_status` enum.
     Connected = 1,
     Disconnected = 2,
     UnknownConnection = 3,

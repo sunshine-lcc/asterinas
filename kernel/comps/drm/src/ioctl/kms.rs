@@ -15,7 +15,7 @@ use ostd_pod::Pod;
 use crate::{
     device::DrmFeatures,
     file::{DrmClientCaps, DrmFile},
-    ioctl::ioctl_defs,
+    ioctl::{DRM_EVENT_FLIP_COMPLETE, DrmEventVblank, ioctl_defs},
     kms::{
         display_mode::{DrmDisplayMode, DrmModeInfo},
         objects::{
@@ -394,6 +394,97 @@ impl DrmFile {
         }
 
         Ok(0)
+    }
+
+    pub(super) fn drm_mode_page_flip(&self, cmd: ioctl_defs::ModePageFlip) -> Result<i32> {
+        /// Ask userspace to receive a completion event through `read`.
+        const DRM_MODE_PAGE_FLIP_EVENT: u32 = 0x01;
+        /// All flags currently defined by the DRM UAPI.
+        const DRM_MODE_PAGE_FLIP_FLAGS: u32 = 0x0f;
+
+        let args: DrmModePageFlip = cmd.read()?;
+        if args.flags & !DRM_MODE_PAGE_FLIP_FLAGS != 0 {
+            return_errno_with_message!(Errno::EINVAL, "the page-flip flags are invalid");
+        }
+
+        let kms_ops = self.device().as_kms_ops().unwrap();
+        let object_store = kms_ops.mode_config().object_store().lock();
+
+        let crtc = object_store
+            .lookup_crtc_by_id(args.crtc_id)
+            .ok_or(Errno::ENOENT)?;
+        let primary_plane = crtc.primary_plane().upgrade().ok_or(Errno::ENOENT)?;
+        let display_mode = crtc
+            .state()
+            .lock()
+            .display_mode()
+            .ok_or_else(|| Error::with_message(Errno::EINVAL, "the CRTC is disabled"))?;
+        let source_rect = DrmRect::new(0, 0, display_mode.hdisplay(), display_mode.vdisplay());
+
+        let framebuffer = self
+            .lookup_framebuffer(args.fb_id)
+            .ok_or(Errno::ENOENT)?;
+        if !primary_plane
+            .pixel_formats()
+            .contains(&framebuffer.pixel_format())
+        {
+            return_errno_with_message!(
+                Errno::EINVAL,
+                "the page-flip framebuffer format is unsupported by the primary plane"
+            );
+        }
+        let framebuffer_size = framebuffer.size();
+        if !DrmRect::new(0, 0, framebuffer_size.width(), framebuffer_size.height())
+            .contains_rect(&source_rect)
+        {
+            return_errno_with_message!(
+                Errno::EINVAL,
+                "the page-flip framebuffer is smaller than the active mode"
+            );
+        }
+
+        // simpledrm completes the flip synchronously and copies the new
+        // framebuffer to the boot framebuffer before this call returns.
+        kms_ops.set_crtc(crtc.index(), Some(&framebuffer), source_rect)?;
+        primary_plane.update_state(DrmPlaneState::new(
+            source_rect,
+            DrmRect::new(0, 0, display_mode.hdisplay(), display_mode.vdisplay()),
+            Arc::downgrade(&framebuffer),
+            Arc::downgrade(crtc),
+        ));
+        drop(object_store);
+
+        if args.flags & DRM_MODE_PAGE_FLIP_EVENT != 0 {
+            self.queue_event(DrmEventVblank {
+                type_: DRM_EVENT_FLIP_COMPLETE,
+                length: size_of::<DrmEventVblank>() as u32,
+                user_data: args.user_data,
+                ..Default::default()
+            });
+        }
+
+        Ok(0)
+    }
+
+    pub(super) fn drm_mode_cursor(&self, cmd: ioctl_defs::ModeCursor) -> Result<i32> {
+        let args: DrmModeCursor = cmd.read()?;
+        self.check_cursor_crtc(args.crtc_id)?;
+        Ok(0)
+    }
+
+    pub(super) fn drm_mode_cursor2(&self, cmd: ioctl_defs::ModeCursor2) -> Result<i32> {
+        let args: DrmModeCursor2 = cmd.read()?;
+        self.check_cursor_crtc(args.crtc_id)?;
+        Ok(0)
+    }
+
+    fn check_cursor_crtc(&self, crtc_id: u32) -> Result<()> {
+        let kms_ops = self.device().as_kms_ops().unwrap();
+        let object_store = kms_ops.mode_config().object_store().lock();
+        object_store
+            .lookup_crtc_by_id(crtc_id)
+            .map(|_| ())
+            .ok_or(Errno::ENOENT.into())
     }
 
     pub(super) fn drm_mode_get_encoder(&self, cmd: ioctl_defs::ModeGetEncoder) -> Result<i32> {
@@ -1007,6 +1098,55 @@ pub(super) struct DrmModeCrtc {
     gamma_size: u32,
     mode_valid: u32,
     mode: DrmModeInfo,
+}
+
+/// `struct drm_mode_crtc_page_flip` in Linux.
+///
+/// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L590-L596>.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod)]
+pub(super) struct DrmModePageFlip {
+    crtc_id: u32,
+    fb_id: u32,
+    flags: u32,
+    reserved: u32,
+    user_data: u64,
+}
+
+/// `struct drm_mode_cursor` in Linux.
+///
+/// simpledrm exposes no cursor plane. Accept cursor requests as no-ops so
+/// compositors that use the legacy cursor ioctl can still complete an output
+/// commit.
+///
+/// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L605-L613>.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod)]
+pub(super) struct DrmModeCursor {
+    flags: u32,
+    crtc_id: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    handle: u32,
+}
+
+/// `struct drm_mode_cursor2` in Linux.
+///
+/// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L615-L625>.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod)]
+pub(super) struct DrmModeCursor2 {
+    flags: u32,
+    crtc_id: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    handle: u32,
+    hot_x: i32,
+    hot_y: i32,
 }
 
 /// `struct drm_mode_get_encoder` in Linux.

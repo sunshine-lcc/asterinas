@@ -23,8 +23,8 @@ use ostd::{
 };
 pub(crate) use pause::{Pause, PauseReason, with_sigmask_changed};
 pub(crate) use pending::{DequeuedSignal, HandlePendingSignal};
-pub(crate) use poll::{PollAdaptor, Pollee, Poller};
-pub use poll::{PollHandle, Pollable};
+pub(crate) use poll::{PollAdaptor, Poller};
+pub use poll::{Pollee, PollHandle, Pollable};
 use sig_action::{SigAction, SigActionFlags, SigDefaultAction};
 use sig_mask::SigMask;
 use sig_num::SigNum;

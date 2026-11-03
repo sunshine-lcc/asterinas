@@ -50,6 +50,8 @@ use component::{ComponentInitError, init_component};
 
 const SIMPLEDRM_NAME: &str = "simpledrm";
 const SIMPLEDRM_DESC: &str = "DRM driver for simple-framebuffer platform devices";
+const SIMPLEDRM_VREFRESH_HZ: u32 = 60;
+const SIMPLEDRM_ASSUMED_DPI: u32 = 96;
 
 #[init_component(process)]
 fn init() -> Result<(), ComponentInitError> {
@@ -120,6 +122,13 @@ impl SimpleDrmDevice {
             object_store,
         )?
         .set_shadow_buffer();
+
+        // The firmware framebuffer is already scanning out at boot. Publish
+        // that state so compositors do not try to enable a disabled CRTC
+        // without a scanout buffer.
+        let display_mode =
+            DrmDisplayMode::from_size(DrmSize::new(width, height), SIMPLEDRM_VREFRESH_HZ)?;
+        mode_config.set_initial_enabled_mode(crtc, encoder, connector, display_mode)?;
 
         Ok(Self {
             boot_framebuffer: boot_framebuffer.clone(),
@@ -229,9 +238,6 @@ impl DrmKmsOps for SimpleDrmDevice {
     }
 
     fn probe_connector(&self, _connector: &DrmConnector) -> Result<DrmConnectorProbeState> {
-        const SIMPLEDRM_VREFRESH_HZ: u32 = 60;
-        const SIMPLEDRM_ASSUMED_DPI: u32 = 96;
-
         let width = u32::try_from(self.boot_framebuffer.width())?;
         let height = u32::try_from(self.boot_framebuffer.height())?;
         let resolution = DrmSize::new(width, height);
